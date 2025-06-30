@@ -1,12 +1,19 @@
 import pymysql
 import os
-from datetime import date
+import datetime
 
 DB_HOST = os.getenv('DB_HOST')
 DB_USER = os.getenv('DB_USER')
 DB_PASSWORD = os.getenv('DB_PASSWORD')
 DB_NAME = os.getenv('DB_NAME')
 DB_PORT = int(os.getenv('DB_PORT'))
+
+def expandir_rango_fechas(desde, hasta):
+    """Ajusta el rango para que hasta incluya todo el día."""
+    desde_dt = datetime.datetime.strptime(desde, '%Y-%m-%d')
+    hasta_dt = datetime.datetime.strptime(hasta, '%Y-%m-%d') + datetime.timedelta(days=1) - datetime.timedelta(seconds=1)
+    return desde_dt, hasta_dt
+
 
 def get_connection():
     return pymysql.connect(
@@ -17,127 +24,158 @@ def get_connection():
         port=DB_PORT
     )
 
-def obtenerOfertas():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    hoy = date.today()
-    hoy_aammdd = int(hoy.strftime("%y%m%d"))
-
-    cursor.execute("""
-        SELECT o.of_codigo, o.of_fecha, o.of_imagen, o.of_observaciones, p.id_descripcion, p.id_lista1
-        FROM INAROF01 o
-        JOIN INARMA01 p ON o.of_codigo = p.id_codigo
-        WHERE o.of_fecha > %s
-    """, (hoy_aammdd,))
-
-    resultados = cursor.fetchall()
-    conn.close()
-
-    if not resultados:
-        return None
-
-    ofertas = [{
-        "nombre": nombre,
-        "precio": precio,
-        "fecha": fecha,
-        "imagen": imagen,
-        "observaciones": observaciones,
-        "codigo": codigo,
-        
-    } for codigo, fecha, imagen, observaciones, nombre, precio in resultados]
-
-    return ofertas
-
-def obtenerProductosPorNombre(nombre):
+def obtenerTotalesYDescuentos(desde_fecha, hasta_fecha, contribuyente=None):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id_codigo, id_descripcion 
-        FROM INARMA01 
-        WHERE id_descripcion LIKE %s
-        ORDER BY id_descripcion ASC
-        LIMIT 100
-    """, (nombre + '%',)) 
+        SELECT 
+            SUM(vt_efectivo) AS efectivo,
+            SUM(vt_tarjeta) AS tarjeta,
+            SUM(vt_credito) AS credito,
+            SUM(vt_totalg) AS total_con_iva,
+            SUM(vt_sub_total) AS total_sin_iva,
+            SUM(vt_impuesto) AS iva
+        FROM VEARMA01
+        WHERE vt_bandera != '1' AND vt_fechat BETWEEN %s AND %s
+    """, (desde_fecha, hasta_fecha))
 
-    resultados = cursor.fetchall()
-    conn.close()
-
-    if not resultados:
-        return None
-
-    productos = [{"codigo": codigo, "nombre": descripcion} for codigo, descripcion in resultados]
-    return productos
-
-
-def obtenerProductosPorCodigo(codigo):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id_codigo, id_descripcion, id_grupo, id_maximo, id_minimo, id_lista1, id_provee
-        FROM INARMA01
-        WHERE id_codigo = %s
-    """, (codigo,))
-    arma = cursor.fetchone()
-
-    if not arma:
-        conn.close()
-        return None
-    
-    codigo, nombre, grupo, maximo, minimo, precio_lista, id_proveedor = arma
-
-    cursor.execute("""
-        SELECT dt_sadoinicial, dt_entradas, dt_salidas, dt_ultimo_costo, dt_ultima_venta, dt_ultima_compra
-        FROM INARAR01
-        WHERE dt_codigo = %s
-    """, (codigo,))
-    arar = cursor.fetchone()
-
-    if arar:
-        saldo_inicial, entradas, salidas, ultimo_costo, ultima_venta, ultima_compra = arar
-        existencia = (saldo_inicial or 0) + (entradas or 0) - (salidas or 0)
-    else:
-        existencia = None
-        ultimo_costo = None
-        ultima_venta = None
-
-    cursor.execute("""
-        SELECT dt_cliente
-        FROM PRARMA01
-        WHERE dt_codigoc = %s
-    """, (id_proveedor,))
-    proveedor = cursor.fetchone()
-    nombre_proveedor = proveedor[0] if proveedor else "Desconocido"
-
+    resultado = cursor.fetchone()
     conn.close()
 
     return {
-        "codigo": codigo,
-        "nombre": nombre,
-        "grupo": grupo,
-        "maximo": maximo,
-        "minimo": minimo,
-        "precio": precio_lista,
-        "existencia": existencia,
-        "ultimo_costo": ultimo_costo,
-        "ultima_venta": ultima_venta,
-        "ultima_compra": ultima_compra,
-        "proveedor": nombre_proveedor
+        "efectivo": float(resultado[0] or 0),
+        "tarjeta": float(resultado[1] or 0),
+        "credito": float(resultado[2] or 0),
+        "total_con_iva": float(resultado[3] or 0),
+        "total_sin_iva": float(resultado[4] or 0),
+        "iva": float(resultado[5] or 0)
     }
 
 
-def obtenerLosPrimerosProductos(limit):
+
+def obtenerRecibosConIntervaloYContribuyente(desde_fecha, hasta_fecha, contribuyente):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM INARMA01 LIMIT %s", (limit,))
-    rows = cursor.fetchall()
+    
+    cursor.execute("""
+        SELECT id_recibo, id_fecha, id_neto, id_descuento, id_concepto1, id_contribuyente 
+        FROM TEARMO01 
+        WHERE id_fecha BETWEEN %s AND %s
+        AND id_contribuyente LIKE %s
+        ORDER BY id_fecha DESC
+    """, (desde_fecha, hasta_fecha, f"%{contribuyente}%"))
+
+    resultados = cursor.fetchall()
     conn.close()
-    productos = []
-    for row in rows:
-        productos.append({
-            "codigo": row[1],
-            "nombre": row[3]  
-        })
-    return productos
+
+    if not resultados:
+        return []
+
+    recibos = [
+        {
+            "recibo": row[0],
+            "fecha": row[1],
+            "neto": row[2],
+            "descuento": row[3],
+            "concepto": row[4],
+            "contribuyente": row[5],
+        } 
+        for row in resultados
+    ]
+    return recibos
+
+def obtenerRecibosConIntervalo(desde_fecha, hasta_fecha):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id_recibo, id_fecha, id_neto, id_descuento, id_concepto1, id_contribuyente 
+        FROM TEARMO01 
+        WHERE id_fecha BETWEEN %s AND %s
+        ORDER BY id_fecha DESC
+    """, (desde_fecha, hasta_fecha)) 
+
+    resultados = cursor.fetchall()
+    conn.close()
+
+    if not resultados:
+        return []
+
+    recibos = [
+        {
+            "recibo": row[0],
+            "fecha": row[1],
+            "neto": row[2],
+            "descuento": row[3],
+            "concepto": row[4],
+            "contribuyente": row[5],
+        } 
+        for row in resultados
+    ]
+    return recibos
+
+def obtenerRecibosHoy():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    fecha_hoy = datetime.datetime.today().strftime('%y%m%d')
+
+    cursor.execute("""
+        SELECT id_recibo, id_fecha, id_neto, id_descuento, id_concepto1, id_contribuyente 
+        FROM TEARMO01 
+        WHERE id_fecha = %s
+        ORDER BY id_fecha DESC
+    """, (fecha_hoy,)) 
+
+    resultados = cursor.fetchall()
+    conn.close()
+
+    if not resultados:
+        return []
+
+    recibos = [
+        {
+            "recibo": row[0],
+            "fecha": row[1],
+            "neto": row[2],
+            "descuento": row[3],
+            "concepto": row[4],
+            "contribuyente": row[5],
+        } 
+        for row in resultados
+    ]
+    return recibos
+
+def obtenerDespliegueTotales(desde_fecha, hasta_fecha):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT 
+            c.id_nombrecuenta,
+            COALESCE(SUM(m.id_neto), 0) AS total_neto,
+            COALESCE(SUM(m.id_descuento), 0) AS total_descuento
+        FROM TEARMO01 m
+        JOIN TEARCA01 c ON m.id_cuenta = c.id_codigoc
+        WHERE m.id_fecha BETWEEN %s AND %s
+        AND m.id_status = 0
+        GROUP BY c.id_nombrecuenta
+        ORDER BY c.id_nombrecuenta
+    """, (desde_fecha, hasta_fecha))
+
+    resultados = cursor.fetchall()
+    conn.close()
+
+    if not resultados:
+        return []
+
+    despliegue = [
+        {
+            "cuenta": row[0],  # Ahora es el nombre de la cuenta
+            "total_neto": float(row[1]),
+            "total_descuento": float(row[2])
+        } 
+        for row in resultados
+    ]
+    return despliegue
