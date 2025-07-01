@@ -37,7 +37,7 @@ def obtenerTotalesYDescuentos(desde_fecha, hasta_fecha, contribuyente=None):
             SUM(vt_sub_total) AS total_sin_iva,
             SUM(vt_impuesto) AS iva
         FROM VEARMA01
-        WHERE vt_bandera != '1' AND vt_fechat BETWEEN %s AND %s
+        WHERE vt_bandera != '0' AND vt_fechat BETWEEN %s AND %s
     """, (desde_fecha, hasta_fecha))
 
     resultado = cursor.fetchone()
@@ -59,12 +59,11 @@ def obtenerRecibosConIntervaloYContribuyente(desde_fecha, hasta_fecha, contribuy
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT id_recibo, id_fecha, id_neto, id_descuento, id_concepto1, id_contribuyente 
-        FROM TEARMO01 
-        WHERE id_fecha BETWEEN %s AND %s
-        AND id_contribuyente LIKE %s
+        SELECT vt_folio, vt_fetchat, vt_totalg, vt_impuesto, vt_subtotal, vt_efectivo, vt_tarjeta, vt_credito, vt_abono
+        FROM VERAMA01 
+        WHERE vt_bandera = 1 and vt_fetchat BETWEEN %s AND %s
         ORDER BY id_fecha DESC
-    """, (desde_fecha, hasta_fecha, f"%{contribuyente}%"))
+    """, (desde_fecha, hasta_fecha))
 
     resultados = cursor.fetchall()
     conn.close()
@@ -90,10 +89,12 @@ def obtenerRecibosConIntervalo(desde_fecha, hasta_fecha):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id_recibo, id_fecha, id_neto, id_descuento, id_concepto1, id_contribuyente 
-        FROM TEARMO01 
-        WHERE id_fecha BETWEEN %s AND %s
-        ORDER BY id_fecha DESC
+        SELECT vt_folio, vt_fechat, vt_totalg, vt_impuesto, vt_sub_total,
+                vt_efectivo, vt_tarjeta, vt_credito, vt_abono
+        FROM VEARMA01
+        WHERE vt_bandera != '1' 
+        WHERE vt_fechat BETWEEN %s AND %s
+        ORDER BY vt_fechat DESC
     """, (desde_fecha, hasta_fecha)) 
 
     resultados = cursor.fetchall()
