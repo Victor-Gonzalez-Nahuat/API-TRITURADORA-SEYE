@@ -37,7 +37,7 @@ def obtenerTotalesYDescuentos(desde_fecha, hasta_fecha, contribuyente=None):
             SUM(vt_sub_total) AS total_sin_iva,
             SUM(vt_impuesto) AS iva
         FROM VEARMA01
-        WHERE vt_bandera != '0' AND vt_fechat BETWEEN %s AND %s
+        WHERE vt_bandera != '1' AND vt_fechat BETWEEN %s AND %s
     """, (desde_fecha, hasta_fecha))
 
     resultado = cursor.fetchone()
